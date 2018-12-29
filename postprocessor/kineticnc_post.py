@@ -33,9 +33,9 @@ https://github.com/DoESLiverpool/somebody-should/wiki/CNC-Router
 
 
 #
-# Functions to preprocess the incoming FreeCAD object into a 
-# list of [ ({tooldef}, [motion cmds]) ].
-#    (If these become standardized then they can be moved into a separate module or embedded into /Mod/Paths/PathScripts/PastPost.py.)
+# Functions to preprocess the incoming FreeCAD object into a new list:
+# of form: [ ({tooldef}, [motion cmds]) ]
+#     where:   tooldef = { Diameter, S, T, firstpos:{X, Y, Z, F}, lastpos:{X, Y, Z, F} }
 #
 
 import re
@@ -78,10 +78,10 @@ def extracttooldef(cmds):
 def extractfirstpos(cmds):
     pos = { }
     for cmd in cmds:
-        for w in "XYZ":
+        for w in "XYZF":  # includes feedrate
             if w not in pos and w in cmd.Parameters:
                 pos[w] = cmd.Parameters[w]
-        if len(pos) == 3:
+        if len(pos) == 4:
             break
     return pos
 
@@ -96,7 +96,7 @@ def flattenandgroup(postlist):
         motioncmds = cmds[a:b+1]
         tooldef = extracttooldef(cmds[prevb+1:a])
         tooldef["firstpos"] = extractfirstpos(motioncmds)
-        if "X" in tooldef["firstpos"] and "Y" in tooldef["firstpos"] and "Z" in tooldef["firstpos"]:
+        if len(tooldef["firstpos"]) == 4:
             tooldef["lastpos"] = extractfirstpos(reversed(motioncmds))
             if tooldefmotions:
                 tooldef["prevpos"] = tooldefmotions[-1][0]["lastpos"]
@@ -124,11 +124,14 @@ def writetooldefheader(fout, tooldef, i, currpos):
     fout.write("(Diameter: %s)\n" % tooldef.get("Diameter", "unknown"))
     fout.write("M6 T%d (Change tool)\n" % tooldef.get("T", 0))
     fout.write("M3 S%d (Spindle on)\n" % tooldef.get("S", 0))
+    
+    # insert the retract and clearance plane motion explicitly 
     currpos.update(tooldef["firstpos"])
     fout.write("G0 Z%.3f (To clearance plane)\n" % (currpos["Z"]))
     fout.write("G0 X%.3f Y%.3f\n" % (currpos["X"], currpos["Y"]))
-    fout.write("G1 Z%.3f F1000 (Bodge set feedrate)\n" % (currpos["Z"]))
-    currpos["Name"] = "G0"
+    fout.write("G1 Z%.3f F%d (Set feedrate on spot)\n" % (currpos["Z"], currpos["F"]))
+    currpos["Name"] = "G1"
+
 
 def writemotioncmds(fout, motioncmds, currpos):
     for cmd in motioncmds:
@@ -136,21 +139,24 @@ def writemotioncmds(fout, motioncmds, currpos):
         if cmd.Name != currpos.get("Name") or cmd.Name in ["G2", "G3"]:
             fline.append("%s " % cmd.Name)
             currpos["Name"] = cmd.Name
-        for w in "XYZ":
-            if w in cmd.Parameters and cmd.Parameters[w] != currpos.get(w):
+            
+        for w in "XYZcF":
+            if w == "c":
+                if cmd.Name in ["G2", "G3"]:
+                    fline.append("I%.3f J%.3f " % (cmd.Parameters["I"], cmd.Parameters["J"]))
+            elif w in cmd.Parameters and cmd.Parameters[w] != currpos.get(w):
                 fline.append("%s%.3f " % (w, cmd.Parameters[w]))
                 currpos[w] = cmd.Parameters[w]
-        if cmd.Name in ["G2", "G3"]:
-            fline.append("I%.3f J%.3f " % (cmd.Parameters["I"], cmd.Parameters["J"]))
+                
         if fline:
             fout.write("%s\n" % "".join(fline))
+
 
 def writefilefooter(fout, currpos):
     fout.write("M5 (Spindle off)\n")
     fout.write("M30 (End of program)\n")
     fout.write("%")
     
-
 
 #
 # The entry point function that:

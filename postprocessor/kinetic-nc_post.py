@@ -1,5 +1,5 @@
 # ***************************************************************************
-# *   (c) goatchurch (shopinthewoods@gmail.com) 2018                        *
+# *   (c) Julian Todd (julian@goatchurch.org.uk) 2018                       *
 # *                                                                         *
 # *   This file is part of the FreeCAD CAx development system.              *
 # *                                                                         *
@@ -36,6 +36,7 @@ https://github.com/DoESLiverpool/somebody-should/wiki/CNC-Router
 # Functions to preprocess the incoming FreeCAD object into a 
 # list of [ ({tooldef}, [motion cmds]) ].
 #    (If these become standardized then they can be moved into a separate module or embedded into /Mod/Paths/PathScripts/PastPost.py.)
+# 
 
 import re
 
@@ -103,8 +104,10 @@ def flattenandgroup(postlist):
     return tooldefmotions
     
 
+
 #
 # Main three functions that make up the core of this post processor
+#
 #
 import datetime
 def writetooldefheader(fout, tooldef, currpos):
@@ -155,6 +158,7 @@ def writefilefooter(fout, currpos):
 #    (1) Calls the regrouping code, 
 #    (2) Calls the three core functions, and 
 #    (3) saves the file after popping up an editor
+#
 #
 from StringIO import StringIO
 def export(objectslist, filename, argstring):

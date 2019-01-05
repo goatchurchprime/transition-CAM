@@ -101,7 +101,7 @@ def MakeSketches(addObjectFunc, entitygroups):
                     bspl = Part.BSplineCurve(cps,None,None,False,e.dxf.degree,None,e.closed)
                     sketch.addGeometry(bspl)
                     
-                elif e.dxftype() == "LWPOLYLINE":
+                elif e.dxftype() == "LWPOLYLINE":   # you can't cheat and use a BSplineCurve of degree 1 here, unfortunately
                     p0 = Vector(e[0][0], e[0][1])
                     for i in range(1, len(e)):
                         p1 = Vector(e[i][0], e[i][1])
@@ -112,9 +112,18 @@ def MakeSketches(addObjectFunc, entitygroups):
                         p1 = Vector(e[0][0], e[0][1])
                         if p0 != p1:
                             sketch.addGeometry(Part.LineSegment(p0, p1))
+                
+                elif e.dxftype() == "POLYLINE":
+                    p0 = Vector(e[0].dxf.location[0], e[0].dxf.location[1])
+                    for i in range(1, len(e)):
+                        p1 = Vector(e[i].dxf.location[0], e[i].dxf.location[1])
+                        if p0 != p1:
+                            sketch.addGeometry(Part.LineSegment(p0, p1))
+                        p0 = p1
                         
                 else:
-                    print("l", e.dxftype())
+                    print("unknown", e.dxftype())
+                    
             except Part.OCCError as err:
                 print(e, err)
     return sketches

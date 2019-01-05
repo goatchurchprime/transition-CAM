@@ -52,8 +52,8 @@ def flattenobjectlisttocommands(objectslist):
             cmds.extend(pathobj.Path.Commands)
     return cmds
 
-# regroup sequences of pure motion in between tool change definition commands
-motionsequencename = set(["G0", "G1", "G2", "G3"])
+# regroup sequences of pure motion or drill cycle in between tool change definition commands
+motionsequencename = set(["G0", "G1", "G2", "G3", "G90", "G98", "G83", "G80"])
 def findmotionsequenceindexes(cmds):
     imotionsequences = [ ]
     for i, cmd in enumerate(cmds):
@@ -65,7 +65,7 @@ def findmotionsequenceindexes(cmds):
     return imotionsequences
 
 # merge a series of tool definition commands into a single object
-def extracttooldef(cmds):
+def extracttooldef(cmds, motioncmds):
     tooldef = { }
     for cmd in cmds:
         if cmd.Name in ["M6", "M3"]:
@@ -73,6 +73,13 @@ def extracttooldef(cmds):
         else:
             commentparams = re.findall("(Diameter): ([\d\.]+)", cmd.Name)
             tooldef.update(dict(commentparams))
+            
+    smotioncmds = set(cmd.Name  for cmd in motioncmds)
+    if "G83" in smotioncmds:
+        tooldef["cycletype"] = "drill" if "G1" not in smotioncmds else "mixed"
+    else:
+        tooldef["cycletype"] = "normal"
+        
     return tooldef
 
 def extractfirstpos(cmds):
@@ -80,13 +87,14 @@ def extractfirstpos(cmds):
     for cmd in cmds:
         for w in "XYZF":  # includes feedrate
             if w not in pos and w in cmd.Parameters:
-                pos[w] = cmd.Parameters[w]
+                if not (w == "F" and cmd.Parameters[w] == 0):
+                    pos[w] = cmd.Parameters[w]
         if len(pos) == 4:
             break
     return pos
 
 # returns [ ({tooldef}, [motion cmds]) ]
-#     where tooldef = { i, T, S, Diameter, prevpos:{XYZ}, firstpos:{XYZ}, firstpos:{XYZ} }
+#     where tooldef = { i, T, S, Diameter, prevpos:{XYZ}, firstpos:{XYZ}, firstpos:{XYZ}, cycletype:{normal,drill} }
 def flattenandgroup(postlist):
     cmds = flattenobjectlisttocommands(postlist)
     imotionsequences = findmotionsequenceindexes(cmds)
@@ -94,13 +102,18 @@ def flattenandgroup(postlist):
     prevb = -1
     for a, b in imotionsequences:
         motioncmds = cmds[a:b+1]
-        tooldef = extracttooldef(cmds[prevb+1:a])
+        tooldef = extracttooldef(cmds[prevb+1:a], motioncmds)
         tooldef["firstpos"] = extractfirstpos(motioncmds)
-        if len(tooldef["firstpos"]) == 4:
-            tooldef["lastpos"] = extractfirstpos(reversed(motioncmds))
-            if tooldefmotions:
-                tooldef["prevpos"] = tooldefmotions[-1][0]["lastpos"]
+        tooldef["lastpos"] = extractfirstpos(reversed(motioncmds))
+        if tooldefmotions:
+            tooldef["prevpos"] = tooldefmotions[-1][0]["lastpos"]
+        print(tooldef)
+            
+        if tooldef["cycletype"] == "drill":
+            tooldefmotions.append((tooldef, [cmd  for cmd in motioncmds  if cmd.Name == "G83"]))
+        elif len(tooldef["firstpos"]) == 4: # includes F as well as XYZ
             tooldefmotions.append((tooldef, motioncmds))
+            
     return tooldefmotions
     
 
@@ -129,9 +142,14 @@ def writetooldefheader(fout, tooldef, i, currpos):
     currpos.update(tooldef["firstpos"])
     fout.write("G0 Z%.3f (To clearance plane)\n" % (currpos["Z"]))
     fout.write("G0 X%.3f Y%.3f\n" % (currpos["X"], currpos["Y"]))
-    fout.write("G1 Z%.3f F%d (Set feedrate on spot)\n" % (currpos["Z"], currpos["F"]))
-    currpos["Name"] = "G1"
-
+    Fentry = tooldef["firstpos"].get("F", 0)
+    if Fentry != 0:
+        currpos["F"] = Fentry
+        fout.write("G1 Z%.3f F%d (Set feedrate on spot)\n" % (currpos["Z"], currpos["F"]))
+        currpos["Name"] = "G1"
+    else:
+        currpos["Name"] = "G0"
+	
 
 def writemotioncmds(fout, motioncmds, currpos):
     for cmd in motioncmds:
@@ -145,12 +163,24 @@ def writemotioncmds(fout, motioncmds, currpos):
                 if cmd.Name in ["G2", "G3"]:
                     fline.append("I%.3f J%.3f " % (cmd.Parameters["I"], cmd.Parameters["J"]))
             elif w in cmd.Parameters and cmd.Parameters[w] != currpos.get(w):
-                fline.append("%s%.3f " % (w, cmd.Parameters[w]))
-                currpos[w] = cmd.Parameters[w]
+                if not (w == "F" and cmd.Parameters[w] == 0 and cmd.Name == "G0"):  # F0 happens on G0s
+                    fline.append("%s%.3f " % (w, cmd.Parameters[w]))
+                    currpos[w] = cmd.Parameters[w]
                 
         if fline:
             fout.write("%s\n" % "".join(fline))
 
+def writedrillmotioncmds(fout, drillcmds, currpos):
+    for cmd in drillcmds:
+        fline = [ ]
+        assert cmd.Name == "G83"
+        fline.append("%s " % cmd.Name)
+        currpos["Name"] = cmd.Name
+        for w in "QRXYZ":
+            fline.append("%s%.3f " % (w, cmd.Parameters[w]))
+            currpos[w] = cmd.Parameters[w]
+        fout.write("%s\n" % "".join(fline))
+    fout.write("G80\n")
 
 def writefilefooter(fout, currpos):
     fout.write("M5 (Spindle off)\n")
@@ -176,7 +206,10 @@ def export(objectslist, filename, argstring):
     currpos = {}
     for i, (tooldef, motioncmds) in enumerate(tooldefmotions):
         writetooldefheader(fout, tooldef, i, currpos)
-        writemotioncmds(fout, motioncmds, currpos)
+        if tooldef["cycletype"] == "drill": 
+            writedrillmotioncmds(fout, motioncmds, currpos)
+        else:
+            writemotioncmds(fout, motioncmds, currpos)
     writefilefooter(fout, currpos)
 
     gcode = fout.getvalue()
@@ -194,7 +227,7 @@ def export(objectslist, filename, argstring):
         gfile.close()
         
 
-print(__name__ + " gcode postprocessor loaded.")
+print(__name__ + " gcode postprocessor V4 loaded.")
 
 
 

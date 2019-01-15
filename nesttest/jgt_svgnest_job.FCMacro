@@ -1,0 +1,111 @@
+# This is symlinked from ~/freecad/Macros
+
+__title__= "Convert Job Model and Stock to SVG"
+__author__ = "Julian Todd"
+__url__ = "https://github.com/goatchurchprime/transition-CAM"
+
+import re, os, math
+from FreeCAD import Vector, Placement, Rotation
+
+# ln -s  /home/julian/repositories/transition-CAM/nesttest/jgt_svgnest_job.FCMacro jgt_svgnest_job.FCMacro
+
+
+def readapplyplacementsfromsvgout(job, svgnestoutput):
+    svgtext = open(svgnestoutput).read()
+    svgtransforms = re.findall('<g transform="(.*?)"><path id="(.*?)"', svgtext)
+    assert svgtransforms[0] == ('translate(0 0)', 'stock'), svgtransforms[0]
+    
+    # actual structure of the stock is to stash a translate component after the d-path
+    m = re.search('class="bin" transform="translate\((.*?) (.*?)\)"', svgtext)
+    stocksx, stocksy = float(m.group(1)), float(m.group(2))
+
+    for svgtransform, partid in svgtransforms[1:]:
+        m = re.match('translate\((.*?) (.*?)\) rotate\((.*?)\)', svgtransform)
+        sx, sy, rot = float(m.group(1)), float(m.group(2)), float(m.group(3))
+        i = int(partid[4:])
+        job.Model.Group[i].Placement = Placement(Vector(sx-stocksx,sy-stocksy,0), Rotation(rot,0,0))
+        
+
+def extractflatfaceofbody(body):
+    basefaces = [ ]
+    for face in body.Shape.Faces:
+        #print(face.Surface.isPlanar(), face.Surface.Axis, face.Surface.Position)
+        if face.Surface.isPlanar():
+            if abs(face.Surface.Axis.z) == 1 and face.Surface.Position.z == 0:
+                basefaces.append(face)
+    assert len(basefaces) == 1, len(basefaces)
+    return basefaces[0]
+    
+
+def pathcmdstosvg(cmds, bbox):
+    dlist = [ ]
+    prevX, prevY = None, None
+    for cmd in cmds:
+        X, Y = cmd.Parameters.get('X'), cmd.Parameters.get('Y')
+        if X is None or Y is None:
+            prevX, prevY = None, None
+            continue
+        elif cmd.Name == 'G1' and X == prevX and Y == prevY:
+            continue
+        
+        if cmd.Name == 'G0':
+            dlist.append("M%f %f" % (X, Y))
+        elif cmd.Name == 'G1':
+            dlist.append("L%f %f" % (X, Y))
+        elif cmd.Name in ['G2', 'G3']:
+            arcrad = math.hypot(cmd.Parameters.get('I'), cmd.Parameters.get('J'))
+            largarcflag = 0
+            sweepflag = 0 if cmd.Name == 'G2' else 1
+            dlist.append("A%f %f 0 %d %d %f %f" % (arcrad, arcrad, largarcflag, sweepflag, X, Y))
+        else:
+            assert False, (cmd.Name, "not implemented")
+        prevX, prevY = X, Y
+        
+        if "Xlo" not in bbox or X < bbox["Xlo"]:  bbox["Xlo"] = X
+        if "Xhi" not in bbox or X > bbox["Xhi"]:  bbox["Xhi"] = X
+        if "Ylo" not in bbox or Y < bbox["Ylo"]:  bbox["Ylo"] = Y
+        if "Yhi" not in bbox or Y > bbox["Yhi"]:  bbox["Yhi"] = Y
+            
+    return "".join(dlist)
+
+def writesvgnest(job, fnameout):
+    bbox = { }
+    
+    stockface = extractflatfaceofbody(job.Stock)
+    partfaces = [ extractflatfaceofbody(partbody)  for partbody in job.Model.Group ]
+    
+    svgstock = pathcmdstosvg(Path.fromShapes(stockface).Commands, bbox)
+    svgparts = [ pathcmdstosvg(Path.fromShapes(partface).Commands, bbox)  for partface in partfaces ]
+
+    fout = open(fnameout, "w")
+    print(bbox, fout)
+    vboxheight = max(bbox["Yhi"]-bbox["Ylo"], 200)
+    vboxwidth = max(bbox["Xhi"]-bbox["Xlo"], vboxheight*2)
+    fout.write('<svg xmlns="http://www.w3.org/2000/svg" viewBox="%f %f %f %f">\n' % \
+                (bbox["Xlo"], bbox["Ylo"], vboxwidth, vboxheight))
+    fout.write('<path id="stock" style="fill:none; stroke:red" d="%s"/>\n' % svgstock)
+    for i, svgpart in enumerate(svgparts):
+        fout.write('<path id="part%d" style="fill:none; stroke:black" d="%s"/>\n' % (i, svgpart))
+    fout.write("</svg>\n")
+    fout.close()
+
+# File open dialog decides if saving or loading
+from PySide import QtGui
+ldir = FreeCAD.ConfigGet("UserAppData")
+fnamein, fnamefilter = QtGui.QFileDialog.getOpenFileName(parent=Gui.getMainWindow(), 
+    caption="Press Cancel to save a file", dir=ldir, filter="*.svg")
+
+# Find the job object we will use
+possiblejobtypeobjects = [sel.Object  for sel in Gui.Selection.getSelectionEx()] + App.ActiveDocument.findObjects("Path::FeaturePython")
+jobtypeobjects = [ j  for j in possiblejobtypeobjects  if set(j.PropertiesList).issuperset(["Model", "Stock"]) ]
+job = jobtypeobjects[0]
+
+# Apply save or loading (from svgnest output file) depending on presence of fileopen
+if fnamein:
+    readapplyplacementsfromsvgout(job, fnamein)
+else:
+    fnameout = os.path.join(FreeCAD.ConfigGet("UserAppData"), "svgnestinput.svg")
+    print("Saving", fnameout)
+    writesvgnest(job, fnameout)
+
+

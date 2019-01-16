@@ -31,9 +31,10 @@ def extractflatfaceofbody(body):
     for face in body.Shape.Faces:
         #print(face.Surface.isPlanar(), face.Surface.Axis, face.Surface.Position)
         if face.Surface.isPlanar():
-            if abs(face.Surface.Axis.z) == 1 and face.Surface.Position.z == 0:
+            if abs(face.Surface.Axis.z) == 1:
                 basefaces.append(face)
-    assert len(basefaces) == 1, len(basefaces)
+    basefaces.sort(key=lambda X: X.Surface.Position.z)
+    assert len(basefaces) == 2, ("Should be 2 flat faces in body, there are %d" % len(basefaces))
     return basefaces[0]
     
 

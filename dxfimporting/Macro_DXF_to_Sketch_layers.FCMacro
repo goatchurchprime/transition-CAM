@@ -1,8 +1,11 @@
-# This is symlinked from ~/freecad/Macros
+# -*- coding: utf-8 -*-
 
-__title__= "DXF loader layers to sketches"
+__title__= "DXF loader to a sketch for each layer or color"
 __author__ = "Julian Todd"
 __url__ = "https://github.com/goatchurchprime/transition-CAM"
+__date__    = "05/12/2017"
+__Status__ = "stable"
+__Requires__ = "freecad 0.17"
 
 
 # 
@@ -166,4 +169,3 @@ if len(fname) > 0:
     doc.recompute()
     
     
-

@@ -2,7 +2,7 @@
 
 __title__= "DXF loader to a sketch for each layer or color"
 __author__ = "Julian Todd"
-__url__ = "https://github.com/goatchurchprime/transition-CAM"
+__url__ = "https://github.com/goatchurchprime/transition-CAM/blob/master/dxfimporting/Macro_DXF_to_Sketch_layers.FCMacro"
 __date__    = "05/12/2017"
 __Status__ = "stable"
 __Requires__ = "freecad 0.17"
@@ -64,6 +64,14 @@ def makeentitygroups(dfile):
     return entitygroups
 
 
+# See also arbitrary axis algorithm in http://paulbourke.net/dataformats/dxf/dxf10.html
+# Seems to flip rotation around Y-axis, so only invert the X
+def arcextrusionfac(e):
+    if max(abs(e.dxf.extrusion[0]), abs(e.dxf.extrusion[1]), abs(abs(e.dxf.extrusion[2]) - 1)) > 1e-5:
+        print("Unknown arc extrusion", e.dxf.extrusion)
+    return 1 if e.dxf.extrusion[2] >= 0 else -1
+
+
 #
 # Function to create sketches and inject dxf geometry directly into it 
 #
@@ -93,13 +101,19 @@ def MakeSketches(addObjectFunc, entitygroups):
                         sketch.addGeometry(Part.LineSegment(p0, p1))
                 
                 elif e.dxftype() == "CIRCLE":
-                    cen = Vector(e.dxf.center[0], e.dxf.center[1])
+                    exfac = arcextrusionfac(e)
+                    cen = Vector(e.dxf.center[0]*exfac, e.dxf.center[1])
                     sketch.addGeometry(Part.Circle(cen, cnorm, e.dxf.radius))
                     
                 elif e.dxftype() == "ARC":
-                    cen = Vector(e.dxf.center[0], e.dxf.center[1])
+                    exfac = arcextrusionfac(e)
+                    cen = Vector(e.dxf.center[0]*exfac, e.dxf.center[1])
                     circ = Part.Circle(cen, cnorm, e.dxf.radius)
-                    sketch.addGeometry(Part.ArcOfCircle(circ, math.radians(e.dxf.start_angle), math.radians(e.dxf.end_angle)))
+                    a0, a1 = e.dxf.start_angle, e.dxf.end_angle
+                    if exfac == -1:
+                        a0, a1 = 180-a1, 180-a0
+                    sketch.addGeometry(Part.ArcOfCircle(circ, math.radians(a0), math.radians(a1)))
+
                 elif e.dxftype() == "SPLINE":
                     cps = [Vector(x[0], x[1])  for x in list(e.control_points)]
                     bspl = Part.BSplineCurve(cps,None,None,False,e.dxf.degree,None,e.closed)
@@ -133,13 +147,16 @@ def MakeSketches(addObjectFunc, entitygroups):
                     if e.closed:
                         sketch.addGeometry(lwpgeo(p0, Vector(e[0][0], e[0][1]), e[-1][4]))
                 
-                elif e.dxftype() == "POLYLINE": # you can't cheat and use a BSplineCurve of degree 1 here, unfortunately
-                    p0 = Vector(e[0].dxf.location[0], e[0].dxf.location[1])
+                elif e.dxftype() == "POLYLINE": 
+                    p0s = Vector(e[0].dxf.location[0], e[0].dxf.location[1])
+                    p0 = p0s
                     for i in range(1, len(e)):
                         p1 = Vector(e[i].dxf.location[0], e[i].dxf.location[1])
                         if p0 != p1:
                             sketch.addGeometry(Part.LineSegment(p0, p1))
                         p0 = p1
+                    if e.is_closed and p0s != p0:
+                        sketch.addGeometry(Part.LineSegment(p0, p0s))
                         
                 else:
                     print("unknown", e.dxftype())
@@ -156,6 +173,12 @@ def MakeSketches(addObjectFunc, entitygroups):
 if len(fname) > 0:
     FreeCAD.Console.PrintMessage("Parsing file %s" % fname)
     dfile = ezdxf.readfile(fname)
+    
+    unitfacmap = {4:1.0} # 4->mm
+    unitfac = unitfacmap[dfile.header['$INSUNITS']]  
+    fac = dfile.header['$DIMALTF']
+    print("Factor multiply", fac, unitfac)
+
     entitygroups = makeentitygroups(dfile)
     doc = FreeCAD.activeDocument()
     if doc is None:

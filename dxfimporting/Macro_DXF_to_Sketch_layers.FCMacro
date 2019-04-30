@@ -1,33 +1,65 @@
 # -*- coding: utf-8 -*-
 
-__title__= "DXF loader to a sketch for each layer or color"
-__author__ = "Julian Todd"
-__url__ = "https://github.com/goatchurchprime/transition-CAM/blob/master/dxfimporting/Macro_DXF_to_Sketch_layers.FCMacro"
-__date__    = "05/12/2017"
-__Status__ = "stable"
-__Requires__ = "freecad 0.17"
+__Name__ = 'DXF to Sketch Layers'
+__Comment__ = 'DXF loader to a sketch for each layer or color'
+__Author__ = 'Julian Todd'
+__Version__ = '1.0.2'
+__Date__ = '2019-04-30'
+__License__ = 'LGPL-2.0-or-later'
+__Web__ = 'https://github.com/goatchurchprime/transition-CAM/dxfimporting/Macro_DXF_to_Sketch_layers.FCMacro'
+__Wiki__ = ''
+__Icon__ = ''
+__Help__ = ''
+__Status__ = 'stable'
+__Requires__ = 'FreeCAD >= 0.17'
+__Communication__ = ''
+__Files__ = ''
 
-
-# 
-# Operate the File Open UI and doit
-# 
+# This should be a general function available to all macros
+# (Taken from https://stackoverflow.com/questions/12332975/installing-python-module-within-code )
 from PySide import QtGui
-fname, fnamefilter = PySide.QtGui.QFileDialog.getOpenFileName(parent=Gui.getMainWindow(), caption="Read a DXF file", filter="*.dxf")
+def import_and_install(packagename):
+    try:
+        _encoding = QtGui.QApplication.UnicodeUTF8
+        def tr(context, text):
+            return QtGui.QApplication.translate(context, text, None, _encoding)
+    except AttributeError:
+        def tr(context, text):
+            return QtGui.QApplication.translate(context, text, None)
+
+    import importlib
+    try:
+        importlib.import_module(packagename)
+    except ImportError:
+        cmdlist = ["pip", "install", packagename, "--user"]
+        answer = QtGui.QMessageBox.question(None,
+                    tr(__Name__, 'Install %s?' % packagename),
+        	    tr(__Name__, 'Install %s by executing "%s"?' % (packagename, " ".join(cmdlist))))
+        if answer == QtGui.QMessageBox.StandardButton.Yes:
+            import subprocess
+            proc = subprocess.Popen(cmdlist, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            out, err = proc.communicate()
+            print(out.decode())
+            print(err.decode())
+        else:
+            raise
+    globals()[packagename] = importlib.import_module(packagename)
 
 
 #
-# Make sure ezdxf is loaded, or pip install it if not (is this the best way, until it is part of the FC package?)
+# Imports and start of code
 #
-try:
-    import ezdxf
-except ImportError:
-    import pip
-    pip.main(["install", "ezdxf"])
-    import ezdxf
+import_and_install("ezdxf")
+from PySide import QtGui
+import math
+import Draft, Part
+from FreeCAD import Vector
+import FreeCAD
+import FreeCADGui
 
 
 #
-# DXF unwrapping and colour converting.
+# DXF unwrapping and colour converting.  (Would like this in a separate file.)
 #
 dxfcolors = ['#000000', '#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#0000FF', '#FF00FF', '#000000', '#808080', '#C0C0C0', '#FF0000', '#FF7F7F', '#CC0000', '#CC6666', '#990000', '#994C4C', '#7F0000', '#7F3F3F', '#4C0000', '#4C2626', '#FF3F00', '#FF9F7F', '#CC3300', '#CC7F66', '#992600', '#995F4C', '#7F1F00', '#7F4F3F', '#4C1300', '#4C2F26', '#FF7F00', '#FFBF7F', '#CC6600', '#CC9966', '#994C00', '#99724C', '#7F3F00', '#7F5F3F', '#4C2600', '#4C3926', '#FFBF00', '#FFDF7F', '#CC9900', '#CCB266', '#997200', '#99854C', '#7F5F00', '#7F6F3F', '#4C3900', '#4C4226', '#FFFF00', '#FFFF7F', '#CCCC00', '#CCCC66', '#999900', '#99994C', '#7F7F00', '#7F7F3F', '#4C4C00', '#4C4C26', '#BFFF00', '#DFFF7F', '#99CC00', '#B2CC66', '#729900', '#85994C', '#5F7F00', '#6F7F3F', '#394C00', '#424C26', '#7FFF00', '#BFFF7F', '#66CC00', '#99CC66', '#4C9900', '#72994C', '#3F7F00', '#5F7F3F', '#264C00', '#394C26', '#3FFF00', '#9FFF7F', '#33CC00', '#7FCC66', '#269900', '#5F994C', '#1F7F00', '#4F7F3F', '#134C00', '#2F4C26', '#00FF00', '#7FFF7F', '#00CC00', '#66CC66', '#009900', '#4C994C', '#007F00', '#3F7F3F', '#004C00', '#264C26', '#00FF3F', '#7FFF9F', '#00CC33', '#66CC7F', '#009926', '#4C995F', '#007F1F', '#3F7F4F', '#004C13', '#264C2F', '#00FF7F', '#7FFFBF', '#00CC66', '#66CC99', '#00994C', '#4C9972', '#007F3F', '#3F7F5F', '#004C26', '#264C39', '#00FFBF', '#7FFFDF', '#00CC99', '#66CCB2', '#009972', '#4C9985', '#007F5F', '#3F7F6F', '#004C39', '#264C42', '#00FFFF', '#7FFFFF', '#00CCCC', '#66CCCC', '#009999', '#4C9999', '#007F7F', '#3F7F7F', '#004C4C', '#264C4C', '#00BFFF', '#7FDFFF', '#0099CC', '#66B2CC', '#007299', '#4C8599', '#005F7F', '#3F6F7F', '#00394C', '#26424C', '#007FFF', '#7FBFFF', '#0066CC', '#6699CC', '#004C99', '#4C7299', '#003F7F', '#3F5F7F', '#00264C', '#26394C', '#0042FF', '#7F9FFF', '#0033CC', '#667FCC', '#002699', '#4C5F99', '#001F7F', '#3F4F7F', '#00134C', '#262F4C', '#0000FF', '#7F7FFF', '#0000CC', '#6666CC', '#000099', '#4C4C99', '#00007F', '#3F3F7F', '#00004C', '#26264C', '#3F00FF', '#9F7FFF', '#3200CC', '#7F66CC', '#260099', '#5F4C99', '#1F007F', '#4F3F7F', '#13004C', '#2F264C', '#7F00FF', '#BF7FFF', '#6600CC', '#9966CC', '#4C0099', '#724C99', '#3F007F', '#5F3F7F', '#26004C', '#39264C', '#BF00FF', '#DF7FFF', '#9900CC', '#B266CC', '#720099', '#854C99', '#5F007F', '#6F3F7F', '#39004C', '#42264C', '#FF00FF', '#FF7FFF', '#CC00CC', '#CC66CC', '#990099', '#994C99', '#7F007F', '#7F3F7F', '#4C004C', '#4C264C', '#FF00BF', '#FF7FDF', '#CC0099', '#CC66B2', '#990072', '#994C85', '#7F005F', '#7F3F0B', '#4C0039', '#4C2642', '#FF007F', '#FF7FBF', '#CC0066', '#CC6699', '#99004C', '#994C72', '#7F003F', '#7F3F5F', '#4C0026', '#4C2639', '#FF003F', '#FF7F9F', '#CC0033', '#CC667F', '#990026', '#994C5F', '#7F001F', '#7F3F4F', '#4C0013', '#4C262F', '#333333', '#5B5B5B', '#848484', '#ADADAD', '#D6D6D6', '#FFFFFF']
 def getlayercol(e, dfile, blockcolnum):
@@ -58,7 +90,7 @@ def makeentitygroupsrecurse(entitygroupdict, dfile, entities, blockcolnum):
 def makeentitygroups(dfile):
     entitygroupdict = { }
     makeentitygroupsrecurse(entitygroupdict, dfile, dfile.entities, 1)
-    entitygroups = entitygroupdict.items()
+    entitygroups = list(entitygroupdict.items())
     layernameorder = dict((n, i)  for i, n in enumerate(l.dxf.name  for l in dfile.layers))
     entitygroups.sort(key=lambda X:layernameorder[X[0][0]])
     return entitygroups
@@ -75,9 +107,6 @@ def arcextrusionfac(e):
 #
 # Function to create sketches and inject dxf geometry directly into it 
 #
-import math
-import Draft, Part
-from FreeCAD import Vector
 
 def MakeSketches(addObjectFunc, entitygroups):
     cnorm = Vector(0, 0, 1)
@@ -170,25 +199,32 @@ def MakeSketches(addObjectFunc, entitygroups):
 #
 # Main entry which finds or creates the document and body
 #
-if len(fname) > 0:
-    FreeCAD.Console.PrintMessage("Parsing file %s" % fname)
-    dfile = ezdxf.readfile(fname)
-    
-    unitfacmap = {4:1.0} # 4->mm
-    unitfac = unitfacmap[dfile.header['$INSUNITS']]  
-    fac = dfile.header['$DIMALTF']
-    print("Factor multiply", fac, unitfac)
+def main():
+    """Main entry which finds or creates the document and body"""
+    fname, fnamefilter = QtGui.QFileDialog.getOpenFileName(parent=FreeCADGui.getMainWindow(), caption='Read a DXF file', filter='*.dxf')
+    if fname:
+        FreeCAD.Console.PrintMessage('Parsing file {}'.format(fname))
+        dfile = ezdxf.readfile(fname)
 
-    entitygroups = makeentitygroups(dfile)
-    doc = FreeCAD.activeDocument()
-    if doc is None:
-        doc = FreeCAD.newDocument("dxfstuff")
-    if hasattr(App.ActiveDocument, "Body"):
-        addObjectFunc = App.ActiveDocument.Body.newObject
-    else:
-        addObjectFunc = App.ActiveDocument.addObject
+        unitfacmap = {4:1.0} # 4->mm
+        unitfac = unitfacmap[dfile.header['$INSUNITS']]  
+        fac = dfile.header['$DIMALTF']
+        print("Factor multiply requested (not implemented)", fac, unitfac)
 
-    sketches = MakeSketches(addObjectFunc, entitygroups) 
-    doc.recompute()
-    
-    
+        entitygroups = makeentitygroups(dfile)
+        doc = FreeCAD.activeDocument()
+        if doc is None:
+            doc = FreeCAD.newDocument()
+        # Get the active body, if any.
+        obj = FreeCADGui.activeDocument().ActiveView.getActiveObject('pdbody')
+        try:
+            addObjectFunc = obj.newObject
+        except AttributeError:
+            addObjectFunc = doc.addObject
+
+        sketches = MakeSketches(addObjectFunc, entitygroups)
+        doc.recompute()
+
+if __name__ == '__main__':
+    main()
+
